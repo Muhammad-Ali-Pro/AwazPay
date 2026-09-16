@@ -6,7 +6,9 @@ import {
   containsWakePhrase,
   isAffirmative,
   isFinancialIntent,
+  isMenuRequest,
   isNegative,
+  parseMenuSelection,
   parseTranscript,
   parseTranscriptSync,
   pickBestInterpretation,
@@ -22,14 +24,10 @@ import {
   setMicStatus,
   updateRecognition,
 } from '../services/diagnosticsService'
-import { fill, money } from '../data/voicePhrases'
-import {
-  getActiveSpeechProvider,
-  getActiveSpeechProviderId,
-  requestMicrophoneAccess,
-  type RecognitionOutcome,
-  type SpeechContinuousSession,
-} from '../services/speechProvider'
+import { fill, joinPhrases, money } from '../data/voicePhrases'
+import { getActiveSpeechProviderId, type RecognitionOutcome } from '../services/speechProvider'
+import { isVoiceSessionSupported, voiceSession } from '../services/voiceSessionController'
+import { getMicPermissionState } from '../services/micMonitor'
 import { onSpeakingChange } from '../services/voiceOutputService'
 import { PHRASES } from '../data/voicePhrases'
 import { useAnnouncer } from '../state/announcer'
@@ -110,6 +108,14 @@ export interface UseVoiceAssistantResult {
   stopListening: () => void
   /** Tears down the current session and opens a new one on the active provider. */
   switchSpeechProvider: () => void
+  /**
+   * Turns on menu mode, where a bare number selects a menu option without
+   * needing the wake phrase. The home screen switches this on while it is
+   * showing and off when it leaves.
+   */
+  setMenuMode: (enabled: boolean) => void
+  /** Speaks the numbered main menu. */
+  announceMenu: (withIntro?: boolean) => void
 }
 
 /**
@@ -145,14 +151,15 @@ export function useVoiceAssistant(): UseVoiceAssistantResult {
     stopReason,
     setStopReason,
     registerMicControls,
+    canCancel,
+    requestCancel,
   } = useVoiceSession()
 
   const [transcript, setTranscript] = useState('')
   const [awake, setAwake] = useState(false)
   const [micOpen, setMicOpen] = useState(false)
-  const isSupported = getActiveSpeechProvider().isSupported()
+  const isSupported = isVoiceSessionSupported()
 
-  const listenerRef = useRef<SpeechContinuousSession | null>(null)
   const awakeRef = useRef(false)
   const awakeTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -167,6 +174,11 @@ export function useVoiceAssistant(): UseVoiceAssistantResult {
    * wake-word session would fight the flow's own recogniser for the device.
    */
   const borrowedRef = useRef(false)
+  /**
+   * True while the home menu is showing, so a bare number counts as a menu
+   * choice without needing the wake phrase in front of it.
+   */
+  const menuModeRef = useRef(false)
 
   const setAwakeState = useCallback((value: boolean) => {
     awakeRef.current = value
@@ -227,7 +239,7 @@ export function useVoiceAssistant(): UseVoiceAssistantResult {
           break
 
         case 'stop_listening':
-          listenerRef.current?.stop()
+          voiceSession.stop('user said stop listening')
           setStopReason('user')
           setSessionState('off')
           announce(action.text)
@@ -393,6 +405,74 @@ export function useVoiceAssistant(): UseVoiceAssistantResult {
         pendingConfirmRef.current = null
       }
 
+      /**
+       * "Cancel" is always heard, from any screen, with no wake phrase.
+       *
+       * Every other command is gated behind "Hey AwazPay" so ambient talk
+       * cannot move money. Cancelling is the exception, because it is the one
+       * command that is never destructive and the one a user most needs when
+       * they have lost track of where they are. It only does anything when a
+       * screen has registered something to cancel.
+       */
+      const cancelReadings = outcome.alternatives.length
+        ? outcome.alternatives.map((a) => a.transcript)
+        : [outcome.transcript]
+      if (canCancel() && cancelReadings.some((text) => parseTranscriptSync(text).intent === 'cancel')) {
+        setTranscript(outcome.transcript)
+        sleepWake()
+        requestCancel()
+        return
+      }
+
+      /**
+       * Menu mode: on the main screen, a bare number is a menu choice.
+       *
+       * No wake phrase is required here, because AwazPay has just read the
+       * options out and is explicitly waiting for an answer. Requiring "Hey
+       * AwazPay" before every "three" would make the menu useless for the
+       * person it exists for. Menu mode is only on while the home screen is
+       * showing; everywhere else the wake phrase still gates commands.
+       */
+      if (menuModeRef.current) {
+        const readingsForMenu = outcome.alternatives.length
+          ? outcome.alternatives.map((a) => a.transcript)
+          : [outcome.transcript]
+
+        for (const reading of readingsForMenu) {
+          if (isMenuRequest(reading)) {
+            setTranscript(reading)
+            setSessionState('speaking')
+            announce(joinPhrases(PHRASES.menuRepeat, PHRASES.menu), { onEnd: () => toIdle(300) })
+            return
+          }
+          const option = parseMenuSelection(reading)
+          if (option) {
+            vibrate('tap', stateRef.current.settings.vibrationEnabled)
+            setTranscript(reading)
+            setLastTranscript(reading)
+            busyRef.current = true
+            sleepWake()
+            setSessionState('processing')
+            // Built straight from the option rather than re-parsed from its
+            // label, so the menu can never drift away from what it triggers.
+            applyAction(
+              routeIntent(
+                {
+                  intent: option.intent,
+                  slots: {},
+                  confidence: 1,
+                  raw: reading,
+                  normalized: reading,
+                  wakeWordDetected: false,
+                },
+                stateRef.current,
+              ),
+            )
+            return
+          }
+        }
+      }
+
       // Any alternative containing the wake phrase counts, because the top
       // reading often mangles it while a lower one gets it right.
       const readings = outcome.alternatives.length
@@ -424,15 +504,22 @@ export function useVoiceAssistant(): UseVoiceAssistantResult {
       // Not addressed to AwazPay. Show it, but do nothing.
       setTranscript(outcome.transcript)
     },
-    [announce, applyAction, armWakeWindow, handleCommand, setSessionState, toIdle],
+    [announce, applyAction, armWakeWindow, canCancel, handleCommand, requestCancel, setLastTranscript, setSessionState, sleepWake, toIdle],
   )
 
   // -------------------------------------------------- listener lifecycle
 
+  /**
+   * Opens the one shared voice session.
+   *
+   * Guarded so repeated calls (React re-renders, StrictMode's double effect
+   * invocation, a user tapping Resume twice) cannot produce two sessions
+   * competing for the microphone. The controller enforces this too, but
+   * catching it here keeps the log readable.
+   */
   const startSession = useCallback(() => {
-    if (listenerRef.current?.isRunning) return
-    const provider = getActiveSpeechProvider()
-    if (!provider.isSupported()) {
+    if (voiceSession.isRunning) return
+    if (!isVoiceSessionSupported()) {
       setSessionState('error')
       setStopReason('unsupported')
       return
@@ -440,169 +527,174 @@ export function useVoiceAssistant(): UseVoiceAssistantResult {
 
     const langs = RECOGNITION_FALLBACKS[state.settings.voiceLanguage] ?? [state.settings.voiceLanguage, 'en-US']
 
-    const session = provider.startContinuous({
-      langs,
-      onFinal: handleOutcome,
-      onInterim: (text) => {
-        if (!busyRef.current) setTranscript(text)
+    void voiceSession.start(
+      { langs, autoRestart: true },
+      {
+        onFinal: handleOutcome,
+        onInterim: (text) => {
+          if (!busyRef.current) setTranscript(text)
+        },
+        onStatus: (status) => {
+          setMicOpen(status.micStreamOpen)
+          setMicStatus({
+            isCapturing: status.recognitionActive,
+            provider: 'browser',
+            language: status.language,
+            restartCount: status.restartCount,
+            deviceLabel: status.deviceLabel,
+          })
+          if (status.state === 'listening' && !busyRef.current && !awakeRef.current && sessionStateRef.current === 'off') {
+            setSessionState('ready')
+          }
+        },
+        onSilence: () => {
+          // Previously discarded silently. Recording it is what lets a
+          // developer tell "the mic heard nothing" apart from "the mic heard
+          // you and misread you" in Voice Diagnostics.
+          recordSilence(voiceSession.getStatus().language, 'browser')
+        },
+        onError: (message, kind) => {
+          recordError(`${kind}: ${message}`, voiceSession.getStatus().language, 'browser')
+          if (kind === 'permission_denied') {
+            setSessionState('error')
+            setStopReason('permission')
+            announce(PHRASES.micDenied)
+          } else if (kind === 'restart_limit' || kind === 'no_device') {
+            setSessionState('error')
+            setStopReason('restart_limit')
+            announce(PHRASES.micLost)
+          }
+        },
       },
-      onListeningChange: (listening) => {
-        setMicOpen(listening)
-        setMicStatus({
-          isCapturing: listening,
-          provider: provider.id,
-          language: listenerRef.current?.activeLanguage ?? langs[0],
-          restartCount: listenerRef.current?.restartCount ?? 0,
-        })
-        // Coming back from a browser-initiated stop should look like ready,
-        // but never overwrite a state a flow is actively driving.
-        if (listening && !busyRef.current && !awakeRef.current && sessionStateRef.current === 'off') {
-          setSessionState('ready')
-        }
-      },
-      onSilence: () => {
-        // Previously discarded silently. Recording it is what lets a
-        // developer tell "the mic heard nothing" apart from "the mic heard
-        // you and misread you" in Voice Diagnostics.
-        recordSilence(listenerRef.current?.activeLanguage ?? langs[0], provider.id)
-      },
-      onLanguageFallback: (fromLang, toLang) => {
-        recordError(`Language "${fromLang}" was rejected; falling back to "${toLang}".`, toLang, provider.id)
-      },
-      onError: (error: SpeechError) => {
-        recordError(`${error.kind}: ${error.message}`, listenerRef.current?.activeLanguage ?? langs[0], provider.id)
-        if (error.kind === 'permission_denied') {
-          setSessionState('error')
-          setStopReason('permission')
-          announce(PHRASES.micDenied)
-        }
-      },
-      onStopped: (reason) => {
-        setMicOpen(false)
-        setMicStatus({ isCapturing: false })
-        setStopReason(reason)
-        if (reason === 'restart_limit') {
-          setSessionState('error')
-          announce(PHRASES.micLost)
-        } else if (reason !== 'user') {
-          setSessionState('off')
-        }
-      },
-    })
+    )
 
-    listenerRef.current = session
-    setMicStatus({ provider: provider.id, language: session.activeLanguage })
     setStopReason(null)
     setSessionState('ready')
   }, [announce, handleOutcome, setSessionState, setStopReason, state.settings.voiceLanguage])
 
-  /** One-time gesture: request the microphone, then go hands-free. */
+  /**
+   * One-time gesture: open the shared microphone, then go hands-free.
+   *
+   * The controller's own `start` performs the permission request, so there
+   * is no separate probe stream opened and immediately discarded here. That
+   * probe was one of the four competing microphone owners.
+   */
   const enableVoiceMode = useCallback(async () => {
-    if (!getActiveSpeechProvider().isSupported()) {
+    if (!isVoiceSessionSupported()) {
       setStopReason('unsupported')
       setSessionState('error')
       announce(PHRASES.sttUnsupported)
       return
     }
 
-    const { granted, error } = await requestMicrophoneAccess()
-    if (!granted) {
-      setStopReason('permission')
-      setSessionState('error')
-      announce(error?.kind === 'audio_capture' ? PHRASES.micLost : PHRASES.micDenied)
-      return
-    }
-
     setVoiceModeEnabled(true)
     startSession()
-    announce(PHRASES.micGranted)
+
+    // Give the permission prompt a moment to resolve before reporting.
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    if (voiceSession.getStatus().micStreamOpen) announce(PHRASES.micGranted)
   }, [announce, setSessionState, setStopReason, setVoiceModeEnabled, startSession])
 
   const restartListening = useCallback(() => {
     setStopReason(null)
-    if (listenerRef.current?.isRunning) {
-      listenerRef.current.resume()
+    if (voiceSession.isRunning) {
+      voiceSession.resume('user asked to resume')
       setSessionState('ready')
       return
     }
-    // A fully stopped session cannot be resumed; discard it and let the
-    // active provider open a fresh one.
-    listenerRef.current = null
     startSession()
   }, [setSessionState, setStopReason, startSession])
 
   const stopSession = useCallback(() => {
-    listenerRef.current?.stop()
+    voiceSession.stop('user stopped voice mode')
     silence()
     setStopReason('user')
     setSessionState('off')
   }, [silence, setSessionState, setStopReason])
 
   /**
-   * Switches the live session onto whichever provider is now active.
+   * Restarts the session, for example after a Settings change.
    *
-   * Called from Settings right after `setActiveSpeechProvider`, so choosing
-   * Cloud Speech-to-Text there takes effect immediately rather than only on
-   * the next page load.
+   * Kept on the returned API so Settings can force the live session to pick
+   * up a new configuration without a page reload.
    */
   const switchSpeechProvider = useCallback(() => {
-    listenerRef.current?.stop()
-    listenerRef.current = null
+    voiceSession.stop('configuration changed')
     if (voiceModeEnabled) startSession()
   }, [startSession, voiceModeEnabled])
 
-  // Start automatically when voice mode was granted in a previous visit.
+  const setMenuMode = useCallback((enabled: boolean) => {
+    menuModeRef.current = enabled
+  }, [])
+
+  const announceMenu = useCallback(
+    (withIntro = false) => {
+      setSessionState('speaking')
+      announce(withIntro ? joinPhrases(PHRASES.menuIntro, PHRASES.menu) : PHRASES.menu, {
+        onEnd: () => toIdle(200),
+      })
+    },
+    [announce, setSessionState, toIdle],
+  )
+
+  /**
+   * Start listening on load, without waiting for a tap.
+   *
+   * Browsers will not open a microphone on a page's first ever visit without
+   * a user gesture, and that is not something an app can opt out of. But once
+   * permission has been granted for this origin the browser remembers it, and
+   * from then on the session can open itself. So: if permission is already
+   * granted, start immediately; only a genuinely first-time visitor sees the
+   * enable control.
+   */
   useEffect(() => {
-    if (!voiceModeEnabled) return
-    startSession()
+    let cancelled = false
+
+    if (voiceModeEnabled) {
+      startSession()
+      return
+    }
+
+    void getMicPermissionState().then((permission) => {
+      if (cancelled || permission !== 'granted') return
+      // The browser already trusts this origin with the microphone, so no
+      // gesture is required and the user should not be asked for one.
+      setVoiceModeEnabled(true)
+      startSession()
+    })
+
+    return () => {
+      cancelled = true
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voiceModeEnabled])
 
   // Keep recognition in the user's chosen language.
   useEffect(() => {
     const langs = RECOGNITION_FALLBACKS[state.settings.voiceLanguage] ?? [state.settings.voiceLanguage]
-    listenerRef.current?.setLanguage(langs[0])
+    voiceSession.setLanguage(langs[0], 'settings changed')
   }, [state.settings.voiceLanguage])
 
   /**
-   * Close the microphone while AwazPay speaks.
+   * Tell the controller when AwazPay is speaking.
    *
-   * Without this the recogniser transcribes the app's own output and the
-   * assistant ends up talking to itself. The short delay after speech ends
-   * lets the audio tail die away before the microphone reopens.
+   * The controller tears down recognition while speech output plays, so it
+   * never transcribes the app's own voice, and relaunches it afterwards. The
+   * microphone stream itself stays open the whole time, which is why the
+   * recording indicator no longer blinks on every reply.
    */
-  useEffect(() => {
-    let resumeTimer: ReturnType<typeof setTimeout> | null = null
-    const unsubscribe = onSpeakingChange((speaking) => {
-      const listener = listenerRef.current
-      if (!listener?.isRunning) return
-      if (speaking) {
-        if (resumeTimer) clearTimeout(resumeTimer)
-        listener.pause()
-      } else {
-        if (resumeTimer) clearTimeout(resumeTimer)
-        resumeTimer = setTimeout(() => {
-          if (borrowedRef.current) return
-          listener.resume()
-        }, 400)
-      }
-    })
-    return () => {
-      unsubscribe()
-      if (resumeTimer) clearTimeout(resumeTimer)
-    }
-  }, [])
+  useEffect(() => onSpeakingChange((speaking) => voiceSession.setSpeaking(speaking)), [])
 
   // Expose microphone control so transaction flows can borrow the mic.
   useEffect(() => {
     registerMicControls({
       suspend: () => {
         borrowedRef.current = true
-        listenerRef.current?.pause()
+        voiceSession.pause('a transaction flow borrowed the microphone')
       },
       resume: () => {
         borrowedRef.current = false
-        listenerRef.current?.resume()
+        voiceSession.resume('transaction flow returned the microphone')
       },
       restart: () => {
         borrowedRef.current = false
@@ -612,13 +704,12 @@ export function useVoiceAssistant(): UseVoiceAssistantResult {
     return () => registerMicControls(null)
   }, [registerMicControls, restartListening])
 
-  // Release the microphone when the tab is hidden, and take it back on return.
+  // Suspend recognition when the tab is hidden, and take it back on return.
   useEffect(() => {
     function onVisibility() {
-      const listener = listenerRef.current
-      if (!listener?.isRunning) return
-      if (document.hidden) listener.pause()
-      else listener.resume()
+      if (!voiceSession.isRunning) return
+      if (document.hidden) voiceSession.pause('tab hidden')
+      else if (!borrowedRef.current) voiceSession.resume('tab visible again')
     }
     document.addEventListener('visibilitychange', onVisibility)
     return () => document.removeEventListener('visibilitychange', onVisibility)
@@ -628,8 +719,6 @@ export function useVoiceAssistant(): UseVoiceAssistantResult {
     () => () => {
       if (awakeTimer.current) clearTimeout(awakeTimer.current)
       if (idleTimer.current) clearTimeout(idleTimer.current)
-      listenerRef.current?.stop()
-      listenerRef.current = null
     },
     [],
   )
@@ -650,5 +739,7 @@ export function useVoiceAssistant(): UseVoiceAssistantResult {
     restartListening,
     stopListening: stopSession,
     switchSpeechProvider,
+    setMenuMode,
+    announceMenu,
   }
 }

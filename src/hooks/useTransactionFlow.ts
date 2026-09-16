@@ -29,6 +29,8 @@ import { useAppDispatch, useAppState } from '../state/store'
 import { useVoiceSession } from '../state/voiceSession'
 import { DEMO_MOBILE_NUMBER } from '../data/demoWallet'
 import { PHRASES, fill, money, type Phrase } from '../data/voicePhrases'
+import { useReturnToMenu } from './useReturnToMenu'
+import { useCancelHandler } from './useCancelHandler'
 
 /**
  * The voice-profile setting is a user-facing choice; the recogniser needs a
@@ -142,6 +144,7 @@ export function useTransactionFlow({ kind, request }: UseTransactionFlowOptions)
   const state = useAppState()
   const { announce, silence } = useAnnouncer()
   const { suspendListening, resumeListening } = useVoiceSession()
+  const returnToMenu = useReturnToMenu()
   const isSpeechSupported = getActiveSpeechProvider().isSupported()
 
   /**
@@ -233,10 +236,23 @@ export function useTransactionFlow({ kind, request }: UseTransactionFlowOptions)
       executedRef.current = 'cancelled'
       vibrate('error', settingsRef.current.vibrationEnabled)
       patch({ stage: 'cancelled', failureReasonSpoken: reason })
-      announce(reason ?? PHRASES.cancelled)
+      // Back to the menu once the explanation has been spoken, so the user is
+      // never stranded on a dead-end screen with nothing to say.
+      announce(reason ?? PHRASES.cancelled, { onEnd: () => returnToMenu(400) })
     },
-    [announce, patch],
+    [announce, patch, returnToMenu],
   )
+
+  /**
+   * Saying "cancel" stops the transaction from any stage, with no wake
+   * phrase. The flow's own listening turns already accept it as an answer,
+   * but the stages that are not listening — waiting on Trusted Circle
+   * approval, or processing — had no way to hear it before this.
+   */
+  useCancelHandler(() => {
+    if (flowRef.current.stage === 'success' || flowRef.current.stage === 'cancelled') return
+    cancel()
+  })
 
   /**
    * Speaks a prompt, then opens the microphone once the prompt has finished.
@@ -340,7 +356,7 @@ export function useTransactionFlow({ kind, request }: UseTransactionFlowOptions)
       const message =
         result.error === 'insufficient_balance' ? PHRASES.insufficient : PHRASES.invalidAmount
       patch({ stage: 'failed', failureReasonSpoken: message, result })
-      announce(message)
+      announce(message, { onEnd: () => returnToMenu(400) })
       return
     }
 
@@ -363,9 +379,9 @@ export function useTransactionFlow({ kind, request }: UseTransactionFlowOptions)
     // A short delay lets the success state land before the receipt plays.
     setTimeout(() => {
       patch({ stage: 'success', result })
-      announce(receipt)
+      announce(receipt, { onEnd: () => returnToMenu(600) })
     }, 700)
-  }, [announce, cancel, dispatch, kind, patch, state])
+  }, [announce, cancel, dispatch, kind, patch, returnToMenu, state])
 
   // The stage runner is keyed by the stage token, not by callback identity,
   // so it holds the commit function through a ref to avoid reading a stale
@@ -464,7 +480,7 @@ export function useTransactionFlow({ kind, request }: UseTransactionFlowOptions)
         }
         if (amount > state.balance && kind !== 'deposit') {
           patch({ stage: 'failed', failureReasonSpoken: PHRASES.insufficient })
-          announce(PHRASES.insufficient)
+          announce(PHRASES.insufficient, { onEnd: () => returnToMenu(400) })
           break
         }
 
@@ -528,7 +544,7 @@ export function useTransactionFlow({ kind, request }: UseTransactionFlowOptions)
         const approver = state.trustedCircle[0]
         if (!approver) {
           patch({ stage: 'failed', failureReasonSpoken: PHRASES.trustedMissing })
-          announce(PHRASES.trustedMissing)
+          announce(PHRASES.trustedMissing, { onEnd: () => returnToMenu(400) })
           break
         }
 

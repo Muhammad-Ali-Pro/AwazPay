@@ -48,6 +48,19 @@ interface VoiceSessionContextValue {
 
   /** Registered by the assistant so any screen can hand the mic over. */
   registerMicControls: (controls: MicControls | null) => void
+
+  /**
+   * Registers what "cancel" means on the current screen.
+   *
+   * Cancelling is the one command that must always work, from anywhere,
+   * without a wake phrase in front of it. A user who has lost track of where
+   * they are needs a way out that does not depend on remembering anything.
+   */
+  registerCancelHandler: (handler: (() => void) | null) => void
+  /** True when some screen has something cancellable right now. */
+  canCancel: () => boolean
+  /** Runs the registered cancel handler. Returns false if there was none. */
+  requestCancel: () => boolean
   /** Called by a transaction flow taking over the microphone. */
   suspendListening: () => void
   /** Called when a transaction flow gives the microphone back. */
@@ -81,6 +94,7 @@ export function VoiceSessionProvider({ children }: { children: ReactNode }) {
   const [stopReason, setStopReason] = useState<VoiceStopReason>(null)
   const flowRef = useRef<FlowRequest | null>(null)
   const micRef = useRef<MicControls | null>(null)
+  const cancelRef = useRef<(() => void) | null>(null)
   /** Counts nested suspends so two overlapping screens cannot fight. */
   const suspendDepth = useRef(0)
 
@@ -112,6 +126,19 @@ export function VoiceSessionProvider({ children }: { children: ReactNode }) {
 
   const registerMicControls = useCallback((controls: MicControls | null) => {
     micRef.current = controls
+  }, [])
+
+  const registerCancelHandler = useCallback((handler: (() => void) | null) => {
+    cancelRef.current = handler
+  }, [])
+
+  const canCancel = useCallback(() => cancelRef.current !== null, [])
+
+  const requestCancel = useCallback(() => {
+    const handler = cancelRef.current
+    if (!handler) return false
+    handler()
+    return true
   }, [])
 
   const suspendListening = useCallback(() => {
@@ -146,6 +173,9 @@ export function VoiceSessionProvider({ children }: { children: ReactNode }) {
       stopReason,
       setStopReason,
       registerMicControls,
+      registerCancelHandler,
+      canCancel,
+      requestCancel,
       suspendListening,
       resumeListening,
       restartListening,
@@ -161,6 +191,9 @@ export function VoiceSessionProvider({ children }: { children: ReactNode }) {
       sessionState,
       stopReason,
       registerMicControls,
+      registerCancelHandler,
+      canCancel,
+      requestCancel,
       suspendListening,
       resumeListening,
       restartListening,

@@ -7,6 +7,7 @@ import { useAnnouncer } from '../state/announcer'
 import { useAppState } from '../state/store'
 import { amountToSpeech, formatPKR } from '../lib/currency'
 import type { Transaction } from '../types'
+import { useReturnToMenu } from '../hooks/useReturnToMenu'
 
 function describe(tx: Transaction): string {
   switch (tx.direction) {
@@ -36,24 +37,27 @@ export function TransactionHistory() {
   const [searchParams] = useSearchParams()
   const [revealed, setRevealed] = useState(false)
   const spokenRef = useRef(false)
+  const returnToMenu = useReturnToMenu()
 
   const mode = searchParams.get('mode')
   const screenAllowed = !settings.hideSensitiveOnScreen
 
-  function speakHistory(count: number) {
+  /** Reads the recent activity, then hands back to the spoken menu. */
+  function speakHistory(count: number, thenReturn = false) {
+    const onEnd = thenReturn ? () => returnToMenu(500) : undefined
     const recent = transactions.slice(0, count)
     if (!recent.length) {
-      announce('You have no transactions yet.')
+      announce('You have no transactions yet.', { onEnd })
       return
     }
     const lines = recent.map((tx, i) => `${i + 1}. You ${describe(tx)}.`).join(' ')
-    announce(`Please listen to your private financial information. ${lines}`)
+    announce(`Please listen to your private financial information. ${lines}`, { onEnd })
   }
 
   useEffect(() => {
     if (spokenRef.current) return
     spokenRef.current = true
-    speakHistory(mode === 'last' ? 1 : 3)
+    speakHistory(mode === 'last' ? 1 : 3, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode])
 

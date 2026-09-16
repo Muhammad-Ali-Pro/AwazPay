@@ -34,6 +34,10 @@ interface SpeechRecognitionLike extends EventTarget {
   onerror: ((event: Event & { error?: string }) => void) | null
   onend: (() => void) | null
   onstart: (() => void) | null
+  /** Fires when the engine opens the audio device for this pass. */
+  onaudiostart: (() => void) | null
+  /** Fires when the engine first detects a human voice, not just sound. */
+  onspeechstart: (() => void) | null
 }
 
 interface Window {

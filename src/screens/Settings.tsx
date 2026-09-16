@@ -13,6 +13,7 @@ import {
 import { STANDARD_TRANSACTION_LIMIT } from '../engines/securityEngine'
 import { getIntentProvider } from '../services/intentService'
 import { PHRASES } from '../data/voicePhrases'
+import { MicrophoneTest } from '../components/MicrophoneTest'
 import { VoiceDiagnostics } from '../components/VoiceDiagnostics'
 import { VoiceTestLab } from '../components/VoiceTestLab'
 import { MicStatusPanel } from '../components/MicStatusPanel'
@@ -50,6 +51,7 @@ export function Settings() {
   const [aiKey, setAiKey] = useState('')
   const [aiStatus, setAiStatus] = useState<string | null>(null)
   const [aiTesting, setAiTesting] = useState(false)
+  const [micTestEnabled, setMicTestEnabled] = useState(false)
   const [testLabEnabled, setTestLabEnabled] = useState(false)
   const [speechProviderId, setSpeechProviderId] = useState(getActiveSpeechProviderId)
   const [cloudEndpoint, setCloudEndpoint] = useState('https://api.openai.com/v1/audio/transcriptions')
@@ -153,17 +155,21 @@ export function Settings() {
           onChange={(e) => update({ voiceLanguage: e.target.value })}
           className="mt-2 w-full rounded-xl border border-white/15 bg-midnight-700 px-4 py-3 text-white"
         >
-          <option value="auto">Auto / Mixed — Urdu + English (recommended)</option>
-          <option value="ur-PK">پاکستانی اردو — Pakistani Urdu</option>
+          <option value="en-US">English (US) — recommended</option>
+          <option value="en-GB">English (UK)</option>
           <option value="en-PK">Pakistani English</option>
-          <option value="en-US">English (US)</option>
+          <option value="auto">Auto / Mixed — speak Urdu or English, replies in English</option>
+          <option value="ur-PK">پاکستانی اردو — Pakistani Urdu</option>
         </select>
         <p className="mt-2 text-xs leading-relaxed text-white/45">
-          {settings.voiceLanguage === 'auto'
-            ? 'Recognition runs in Pakistani English, which transcribes Roman Urdu and mixed sentences most reliably. AwazPay still replies in Roman Urdu and understands Urdu script.'
-            : settings.voiceLanguage === 'ur-PK'
-              ? 'Best for speaking pure Urdu. Mixed Urdu-English sentences are often recognised better on the Auto / Mixed profile.'
-              : 'Recognition and replies both in English.'}
+          {settings.voiceLanguage === 'ur-PK'
+            ? 'AwazPay replies in Urdu. Best when you speak mostly Urdu, and when an Urdu voice is installed.'
+            : settings.voiceLanguage === 'auto'
+              ? 'Recognition accepts Roman Urdu and mixed sentences; AwazPay replies in English so the voice and the words match.'
+              : 'Recognition and replies both in English. Roman Urdu commands are still understood.'}
+        </p>
+        <p className="mt-2 text-xs leading-relaxed text-white/40">
+          Speaking as: <span className="text-white/70">{activeVoice}</span>
         </p>
         {settings.voiceLanguage === 'ur-PK' && !urduVoice && (
           <p className="mt-2 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-xs leading-relaxed text-white/55">
@@ -300,6 +306,23 @@ export function Settings() {
             Developer mode is on. Toggle it by tapping the AwazPay logo five times. Everything in this section is
             for hackathon testing and is not part of the user-facing product.
           </p>
+
+          <div className="mt-4 rounded-2xl border border-cyan/30 bg-midnight-800 p-4">
+            <h3 className="text-sm font-semibold text-white">Microphone Test</h3>
+            <p className="mt-1 text-xs leading-relaxed text-white/50">
+              Start here if the microphone is misbehaving. Opens the microphone once, runs a single recognition
+              pass, and shows the audio level, the interim transcript and the final transcript. No wake word, no
+              commands, no speech output, and no automatic restarting.
+            </p>
+            <Toggle
+              id="microphone-test"
+              label="Enable Microphone Test"
+              description="Takes over the shared voice session while it is on."
+              checked={micTestEnabled}
+              onChange={setMicTestEnabled}
+            />
+            {micTestEnabled && <MicrophoneTest />}
+          </div>
 
           <div className="mt-4 rounded-2xl border border-white/10 bg-midnight-800 p-4">
             <h3 className="text-sm font-semibold text-white">Voice Diagnostics</h3>

@@ -607,6 +607,85 @@ export function pickBestInterpretation(alternatives: RecognitionAlternative[]): 
 }
 
 /** Reads a plain yes/no answer during a slot-filling question. */
+/**
+ * The spoken main menu.
+ *
+ * Numbers are the shortest thing a person can say and the most reliably
+ * recognised, which matters more than expressiveness when the user cannot
+ * see the screen and every mis-hear costs them a retry.
+ */
+export interface MenuOption {
+  number: number
+  /** The intent this option triggers, routed through the normal engine. */
+  intent: VoiceIntent
+  /** Short label for the on-screen mirror of the menu. */
+  label: string
+}
+
+export const MENU_OPTIONS: MenuOption[] = [
+  { number: 1, intent: 'pay_nfc', label: 'NFC payment' },
+  { number: 2, intent: 'pay', label: 'Transfer money to someone' },
+  { number: 3, intent: 'check_balance', label: 'Check your balance' },
+  { number: 4, intent: 'recent_transactions', label: 'Account activity' },
+  { number: 5, intent: 'cash_deposit', label: 'Cash deposit' },
+]
+
+/** Spoken forms of 1 to 5, in English, Roman Urdu and Urdu script. */
+const MENU_NUMBER_WORDS: Record<string, number> = {
+  one: 1, won: 1, ek: 1, aik: 1, 'ایک': 1,
+  two: 2, to: 2, too: 2, do: 2, 'دو': 2,
+  three: 3, tree: 3, teen: 3, tean: 3, 'تین': 3,
+  four: 4, for: 4, fore: 4, char: 4, chaar: 4, 'چار': 4,
+  five: 5, panch: 5, paanch: 5, panj: 5, 'پانچ': 5,
+}
+
+/**
+ * Reads a menu choice out of an utterance.
+ *
+ * Accepts a bare digit, a spoken number in any of the three scripts, and the
+ * natural phrasings around them ("option two", "number 3", "press four").
+ * Also accepts the option's own name, because a user who remembers "balance"
+ * should not be forced to remember that balance is number three.
+ *
+ * Returns null when the utterance is not a menu choice, so callers can fall
+ * through to normal command parsing.
+ */
+export function parseMenuSelection(transcript: string): MenuOption | null {
+  const text = normalizeForIntent(stripWakePhrase(transcript)).normalized
+  if (!text) return null
+
+  // A bare digit, or one wrapped in the usual menu phrasing.
+  const digit = text.match(/(?:^|\b)(?:option|number|press|say|choice)?\s*([1-5])(?:\b|$)/)
+  if (digit) {
+    const option = MENU_OPTIONS.find((o) => o.number === Number(digit[1]))
+    if (option) return option
+  }
+
+  // A spoken number word. Checked token by token so "two" inside a longer
+  // sentence does not hijack a real command.
+  const tokens = text.split(/\s+/)
+  for (let i = 0; i < tokens.length; i++) {
+    const value = MENU_NUMBER_WORDS[tokens[i]]
+    if (value === undefined) continue
+    // Only trust a number word when the utterance is short, or when it is
+    // introduced by a menu word. "Send two thousand to Ahmed" is not a menu
+    // choice even though it contains "two".
+    const introduced = i > 0 && /^(option|number|press|say|choice)$/.test(tokens[i - 1])
+    if (introduced || tokens.length <= 2) {
+      const option = MENU_OPTIONS.find((o) => o.number === value)
+      if (option) return option
+    }
+  }
+
+  return null
+}
+
+/** True when the user asked to hear the menu again. */
+export function isMenuRequest(transcript: string): boolean {
+  const text = normalizeForIntent(stripWakePhrase(transcript)).normalized
+  return /\b(menu|options|list|choices|what\s*can\s*i\s*say|dobara|phir\s*se)\b/.test(text) || /(مینو|فہرست)/.test(text)
+}
+
 export function isAffirmative(transcript: string): boolean {
   const text = normalizeTranscript(transcript)
   return /\b(yes|yeah|yep|sure|ok|okay|correct|right|haan|han|ji|theek|thik)\b/.test(text) || /(ہاں|جی|ٹھیک)/.test(text)

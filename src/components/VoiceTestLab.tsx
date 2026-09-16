@@ -4,7 +4,7 @@ import { normalizeForIntent } from '../services/normalizationService'
 import { parseTranscriptSync } from '../services/intentService'
 import { getSpeechProvider, listSpeechProviders, type RecognitionOutcome } from '../services/speechProvider'
 import type { SpeechProviderId } from '../services/diagnosticsService'
-import { onMicLevel, startMicMonitor, stopMicMonitor } from '../services/micMonitor'
+import { subscribeMicLevel } from '../services/voiceSessionController'
 
 /**
  * Developer-only Voice Test Lab.
@@ -61,14 +61,9 @@ export function VoiceTestLab() {
   const [micLevel, setMicLevel] = useState(0)
   const [runs, setRuns] = useState<TestRun[]>([])
 
-  useEffect(() => {
-    void startMicMonitor()
-    const unsubscribe = onMicLevel((sample) => setMicLevel(sample.level))
-    return () => {
-      unsubscribe()
-      stopMicMonitor()
-    }
-  }, [])
+  // Reads the shared session's level. Deliberately does not open a
+  // microphone of its own: the controller owns the only stream.
+  useEffect(() => subscribeMicLevel(setMicLevel), [])
 
   async function runTest() {
     setRecording(true)

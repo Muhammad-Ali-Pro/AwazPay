@@ -31,6 +31,8 @@ npm install
 npm run dev          # http://localhost:5173
 ```
 
+That's it every time after the first. `npm install` only needs re-running if `package.json` changes.
+
 | Command | What it does |
 | --- | --- |
 | `npm run dev` | Development server with hot reload |
@@ -38,6 +40,19 @@ npm run dev          # http://localhost:5173
 | `npm run preview` | Serve the production build |
 | `npm run typecheck` | TypeScript only |
 | `npm run verify` | Offline logic and render checks |
+| `npm run proxy` | Optional local backend proxy for Cloud Speech-to-Text (see below) |
+
+### If `npm run dev` fails on Windows (Smart App Control)
+
+If it errors with `Cannot find module @rollup/rollup-win32-x64-msvc` (the message blames "an npm bug", which is misleading), the real cause on some Windows 11 machines is **Smart App Control** silently blocking the native binary Vite's old bundler needed. This project already pins **Vite 4** (Rollup 3, pure JavaScript, no native binary), specifically to avoid that — so a fresh `npm install` should not hit it. If you still see this error, your `node_modules` predates that pin:
+
+```bash
+rm -rf node_modules package-lock.json
+npm install
+npm run dev
+```
+
+If it still fails after that, Smart App Control is enforced on your machine; check **Windows Security → Protection history** for a block event on `rollup.win32-x64-msvc.node` and use its **Allow on device** action if offered, rather than disabling Smart App Control outright.
 
 ### Browser requirements
 
@@ -90,7 +105,31 @@ the microphone when the tab is hidden.
 
 ## Demo commands
 
-Say "Hey AwazPay" first, or fold it into the sentence. Both work.
+### The main menu — say a number
+
+On the home screen, AwazPay reads out five numbered options and listens for a bare number in
+reply — no wake phrase needed there, since the menu has already opened the microphone and is
+waiting for an answer:
+
+| Say | Opens |
+| --- | --- |
+| 1 | NFC payment |
+| 2 | Transfer money to someone |
+| 3 | Check your balance |
+| 4 | Account activity |
+| 5 | Cash deposit |
+
+Numbers are understood in English, Roman Urdu ("ek", "do", "teen", "char", "paanch") and Urdu
+script. After any flow finishes — success, failure or cancellation — AwazPay reads the same menu
+out again automatically; there is no button to press to get back to it.
+
+**"Cancel" always works**, on any screen, with no wake phrase — it is the one command that never
+needs "Hey AwazPay" in front of it, because it is the one a lost or confused user needs most.
+
+### Natural-language commands
+
+Away from the menu, "Hey AwazPay" plus a sentence also works — say it first or fold it into the
+sentence, both are fine:
 
 | Say | Result |
 | --- | --- |
@@ -109,8 +148,16 @@ Say "Hey AwazPay" first, or fold it into the sentence. Both work.
 
 Urdu script works too: میرا بیلنس بتاؤ, احمد کو 5000 روپے بھیجو, موبائل لوڈ کرنا ہے, کیش ڈپازٹ کرنا ہے.
 
-The demo secret word is **falcon**. Verification asks for that word plus a random number, for
-example "falcon forty-seven". **Settings → Demo Data → Reset Demo Data** restores the starting state.
+### The secret word
+
+Set by voice during onboarding, not typed — AwazPay asks you to say it, reads back what it heard,
+and waits for a yes or no before saving it. The demo default is **falcon** if you skip that step.
+Verification always asks for the word plus a fresh random number, for example "falcon forty-seven";
+the number is different on every transaction. **Settings → Demo Data → Reset Demo Data** restores
+the starting state.
+
+**Developer mode** (tap the AwazPay logo five times) reveals the current word and number on the
+verification screen itself, for testing without needing working audio output.
 
 ---
 
@@ -119,10 +166,15 @@ example "falcon forty-seven". **Settings → Demo Data → Reset Demo Data** res
 Use Chrome, on `localhost` or HTTPS, with headphones.
 
 **Test 1 — Enable microphone permission**
-Open the app. You should hear a spoken welcome. Step through onboarding to **Enable Voice Mode** and
-allow the microphone. AwazPay says voice mode is active. On Home the status reads *AwazPay is ready*
-and the indicator shows *Microphone open*. Reload the page: it should resume listening with no
-button press.
+Open the app. You should hear a spoken welcome, then be asked to say your secret word (or skip to
+use the demo default "falcon"). Step through onboarding to **Enable Voice Mode** and allow the
+microphone. On Home, AwazPay reads out the five numbered options and the status reads *AwazPay is
+ready*. Reload the page: it should resume listening and read the menu again with no button press.
+
+**Test 1a — The numbered menu**
+Say "3". AwazPay should open Balance without needing "Hey AwazPay" first. After it finishes
+speaking, it should return to Home and read the menu out again automatically. Try "cancel" mid-way
+through any flow (say it plainly, no wake phrase) and confirm it stops and returns to the menu too.
 
 **Test 2 — "Hey AwazPay mera balance batao"**
 Balance is spoken. Nothing numeric appears on screen; the balance screen shows the privacy curtain.
@@ -406,13 +458,14 @@ that call belongs behind a backend holding the credential.
 ```
 src/
   components/     AwazOrb, PrivacyCurtain, TransactionStage, VoiceStatusPanel, AppShell,
-                  VoiceDiagnostics, VoiceTestLab, MicStatusPanel
+                  VoiceDiagnostics, VoiceTestLab, MicStatusPanel, MicrophoneTest
   data/           demoWallet.ts, voicePhrases.ts
   engines/        securityEngine, commandEngine
-  hooks/          useVoiceAssistant, useTransactionFlow
+  hooks/          useVoiceAssistant, useTransactionFlow, useCancelHandler, useReturnToMenu
   screens/        One file per route, including NfcPayment
-  services/       speechProvider, speechService, voiceOutputService, intentService,
-                  normalizationService, diagnosticsService, micMonitor, transactionService, aiService
+  services/       voiceSessionController, speechProvider, speechService, voiceOutputService,
+                  intentService, normalizationService, diagnosticsService, micMonitor,
+                  transactionService, aiService
   state/          store, announcer, voiceSession, assistantContext
   types/          wallet.ts, voice.ts
 server/
@@ -421,27 +474,50 @@ server/
 
 | Module | Responsibility |
 | --- | --- |
-| `speechProvider` | The provider abstraction: `BrowserSpeechProvider`, `CloudSpeechProvider`, and the registry that switches between them |
-| `speechService` | The Web Speech API wrapper `BrowserSpeechProvider` wraps: recognition, restart guard, language fallback, permission request |
+| `voiceSessionController` | **The single owner of the microphone.** One state machine (`stopped → requesting_permission → ready → listening → processing/speaking → ...`), one `getUserMedia` stream, one active recognition instance. Nothing else in the app is allowed to call `getUserMedia` or `recognition.start()`/`.stop()` directly. |
+| `speechProvider` | The provider abstraction: `BrowserSpeechProvider`, `CloudSpeechProvider`, and the registry that switches between them — both sit on top of the controller |
+| `speechService` | The Web Speech API wrapper `BrowserSpeechProvider` wraps: recognition, restart guard, language fallback |
 | `micMonitor` | Independent microphone level metering via `AudioContext`, used to tell "no audio" apart from "bad transcription" |
 | `diagnosticsService` | In-memory recognition log and live Mic Status, feeding Voice Diagnostics |
 | `voiceOutputService` | Synthesis, Urdu voice selection with Roman Urdu fallback, speaking events |
 | `normalizationService` | Roman Urdu spelling-variant folding and conservative mishearing correction, ahead of intent detection |
-| `intentService` | Transcript → intent and slots, across Urdu script, Roman Urdu and English |
+| `intentService` | Transcript → intent and slots, across Urdu script, Roman Urdu and English; also the numbered-menu parser (`MENU_OPTIONS`, `parseMenuSelection`) |
 | `commandEngine` | Routes an intent to an action. Pure; the hook performs the effects. |
 | `securityEngine` | Transaction limit, unique per-transaction challenges, Trusted Circle |
 | `transactionService` | Simulated payment, top-up, deposit, credit. Owns `localStorage`. |
 | `aiService` | Optional conversational layer; never executes a transaction |
-| `useVoiceAssistant` | The always-on session: wake word, routing, speech, microphone lifecycle |
+| `useVoiceAssistant` | The always-on session: wake word, the numbered menu, routing, speech |
 | `useTransactionFlow` | One transaction from spoken request to private spoken receipt |
+| `useCancelHandler` | Lets any screen declare what "cancel" means there; wired to the global no-wake-phrase cancel command |
+| `useReturnToMenu` | Sends the user back to the spoken main menu once a screen's final sentence has finished playing |
 | `voicePhrases` | Every spoken line, in Urdu script, Roman Urdu and English |
 
 The assistant is mounted once in `AppShell`, so the session survives navigation. A transaction flow
 borrows the microphone while it asks questions and hands it back the moment it finishes, because only
-one recognition session — browser or cloud — can be active at a time. Both `useVoiceAssistant` and
-`useTransactionFlow` talk exclusively to `getActiveSpeechProvider()`; neither one imports
-`speechService` directly, which is what makes the provider swap in Settings take effect everywhere at
-once.
+one recognition instance can be active at a time — `voiceSessionController` enforces this centrally so
+no two parts of the app can independently open the microphone and fight over it (a problem earlier
+versions of this project had). Both `useVoiceAssistant` and `useTransactionFlow` talk exclusively to
+`getActiveSpeechProvider()`; neither one imports `speechService` directly, which is what makes the
+provider swap in Settings take effect everywhere at once.
+
+### Never stuck on one screen
+
+Two things guarantee the app never leaves a blind user stranded:
+
+- **"Cancel" is heard from anywhere**, with no wake phrase, via `useCancelHandler`. Every screen that
+  has something cancellable registers a handler; the assistant checks for one on every utterance
+  before anything else.
+- **Every flow returns to the menu on its own.** Success, failure, cancellation, insufficient
+  balance — each one speaks its final sentence, then `useReturnToMenu` sends the user back to Home
+  and the numbered menu is read out again. Nothing requires finding a "Done" or "Go Home" button.
+
+### Testing the microphone in isolation
+
+**Settings → Developer / Demo Mode → Microphone Test** is the simplest possible check: it opens the
+microphone once, runs a single recognition pass with auto-restart switched off, and shows the level
+bar, interim transcript and final transcript with nothing else running — no wake word, no commands,
+no speech output. Start here whenever the microphone itself is in doubt, before touching any
+language or provider setting.
 
 ### Language model
 
@@ -502,8 +578,11 @@ an approval prompt on the trusted person's own device. This build simulates that
 9. **The Cloud provider's bring-your-own-key path calls the transcription API directly from the
    browser** unless `VITE_CLOUD_STT_PROXY_URL` is set. That direct-call path is a hackathon
    convenience, explicitly not the production shape — see "Speech input architecture" above.
-10. **Mic level metering needs its own microphone permission grant**, separate from recognition's own
-    capture, though both draw from the same physical device and Chrome allows this without conflict.
+10. **This project pins Vite 4 rather than the current Vite 5.** Vite 5's bundler (Rollup 4) ships a
+    native binary per platform; on some Windows 11 machines, Smart App Control blocks that binary
+    outright and there is no code-level workaround for it. Vite 4's bundler (Rollup 3) is pure
+    JavaScript with no native binary, which sidesteps the problem entirely. Revisit this pin if that
+    Windows-side restriction is no longer a concern for your deployment targets.
 
 ---
 

@@ -30,10 +30,11 @@ export const DEMO_MOBILE_NUMBER = '0300 1234567'
 
 export const DEFAULT_SETTINGS: AppSettings = {
   voiceSpeed: 1,
-  // Auto / Mixed is the default: recognition runs in Pakistani English, which
-  // transcribes Roman Urdu and code-mixed sentences far more reliably than an
-  // Urdu-only model, while AwazPay still speaks and understands Urdu.
-  voiceLanguage: 'auto',
+  // English is the default spoken language. Recognition still accepts Roman
+  // Urdu and code-mixed speech, but replies come back in English so the voice
+  // and the words match — an English voice reading Roman Urdu was the reason
+  // speech output sounded wrong. Urdu output is a Settings choice away.
+  voiceLanguage: 'en-US',
   privateAudioMode: true,
   hideSensitiveOnScreen: true,
   vibrationEnabled: true,

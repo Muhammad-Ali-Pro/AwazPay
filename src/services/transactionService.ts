@@ -22,7 +22,7 @@ export const STORAGE_KEY = 'awazpay_state_v1'
  * better than an Urdu-only model. Both migrations only replace a default the
  * user never chose; an explicit choice is always left alone.
  */
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 const SCHEMA_KEY = 'awazpay_schema_version'
 
 /** Generates a human-readable reference for a simulated transaction. */
@@ -63,7 +63,7 @@ export function loadWallet(): AppState {
     // Only superseded defaults are migrated. If the stored value is one this
     // app once shipped as its default, it was never a deliberate choice, so
     // it moves to the current default; anything else is the user's own pick.
-    const SUPERSEDED_DEFAULTS = ['en-US', 'ur-PK']
+    const SUPERSEDED_DEFAULTS = ['ur-PK', 'auto']
     if (readSchemaVersion() < SCHEMA_VERSION) {
       if (SUPERSEDED_DEFAULTS.includes(settings.voiceLanguage)) {
         settings.voiceLanguage = fresh.settings.voiceLanguage

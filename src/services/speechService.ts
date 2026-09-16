@@ -129,11 +129,14 @@ function createRecognition(lang: string, continuous: boolean): SpeechRecognition
 }
 
 /**
- * Asks the browser for microphone permission up front.
+ * @deprecated Do not call this. Use `voiceSessionController.start()` instead.
  *
- * Called from the one-time "Enable Voice Mode" gesture so the permission
- * prompt appears once, at a moment the user is expecting it, rather than in
- * the middle of a spoken command.
+ * This opened a microphone stream purely to trigger the permission prompt and
+ * then stopped its tracks immediately. That made it a third competing owner
+ * of the device, and the open-then-close right before recognition started was
+ * one of the causes of the microphone cycling on and off. The controller now
+ * requests permission by opening the one stream it keeps for the whole
+ * session. Kept only so the export does not break, and unused by the app.
  */
 export async function requestMicrophoneAccess(): Promise<{ granted: boolean; error?: SpeechError }> {
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {

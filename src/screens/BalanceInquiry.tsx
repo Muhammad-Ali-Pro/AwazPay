@@ -6,6 +6,7 @@ import { PrivacyCurtain } from '../components/PrivacyCurtain'
 import { useAnnouncer } from '../state/announcer'
 import { useAppState } from '../state/store'
 import { amountToSpeech, formatPKR } from '../lib/currency'
+import { useReturnToMenu } from '../hooks/useReturnToMenu'
 
 /**
  * Balance inquiry.
@@ -20,15 +21,22 @@ export function BalanceInquiry() {
   const { announce } = useAnnouncer()
   const { balance, settings } = useAppState()
   const spokenRef = useRef(false)
+  const returnToMenu = useReturnToMenu()
 
-  const speakBalance = useCallback(() => {
-    announce(`Your available AwazPay balance is ${amountToSpeech(balance)}. This is simulated demo data.`)
-  }, [announce, balance])
+  /** Speaks the balance, then hands the user back to the spoken menu. */
+  const speakBalance = useCallback(
+    (thenReturn = false) => {
+      announce(`Your available AwazPay balance is ${amountToSpeech(balance)}. This is simulated demo data.`, {
+        onEnd: thenReturn ? () => returnToMenu(500) : undefined,
+      })
+    },
+    [announce, balance, returnToMenu],
+  )
 
   useEffect(() => {
     if (spokenRef.current) return
     spokenRef.current = true
-    speakBalance()
+    speakBalance(true)
   }, [speakBalance])
 
   return (
@@ -44,7 +52,7 @@ export function BalanceInquiry() {
           detail="Your balance is being delivered through voice guidance and is not shown on screen."
         />
 
-        <AccessibleButton variant="secondary" onClick={speakBalance}>
+        <AccessibleButton variant="secondary" onClick={() => speakBalance(false)}>
           🔊 Say It Again
         </AccessibleButton>
 

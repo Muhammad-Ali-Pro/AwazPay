@@ -120,13 +120,30 @@ else fail('Awaz Orb still rendered', 'orb markup not found')
 // no "tap to speak" button to find.
 if (!home.includes('Tap to Speak')) pass('no Tap to Speak button on the home screen')
 else fail('no Tap to Speak button on the home screen', 'the button is still rendered')
-if (home.includes('Enable Voice Mode')) pass('one-time voice permission control is offered')
-else fail('one-time voice permission control is offered', 'enable control not found')
+if (home.includes('Start Listening')) pass('one-time voice permission control is offered')
+else fail('one-time voice permission control is offered', 'start control not found')
 if (home.includes('AwazPay Assistant') && home.includes('Banking'))
   pass('AwazPay agent branding is present')
 else fail('AwazPay agent branding is present', 'agent branding not found')
-if (home.includes('Hey AwazPay')) pass('wake phrase still shown')
-else fail('wake phrase still shown', 'wake phrase not found in markup')
+
+// The home screen is a spoken numbered menu: every option must be reachable
+// by saying its number, and mirrored on screen for a sighted helper.
+const MENU_LABELS = [
+  'NFC payment',
+  'Transfer money to someone',
+  'Check your balance',
+  'Account activity',
+  'Cash deposit',
+]
+for (const label of MENU_LABELS) {
+  if (home.includes(label)) pass(`menu option "${label}" is shown`)
+  else fail(`menu option "${label}" is shown`, 'not found in markup')
+}
+if (home.includes('Say a number')) pass('menu invites a spoken number')
+else fail('menu invites a spoken number', 'prompt not found')
+// Mobile top-up was removed from the menu on request.
+if (!home.includes('Mobile Load')) pass('mobile load is no longer offered on the menu')
+else fail('mobile load is no longer offered on the menu', 'it is still rendered')
 
 const splash = renderToString(
   <AppStateProvider>

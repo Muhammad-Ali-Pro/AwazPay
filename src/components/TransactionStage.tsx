@@ -6,6 +6,7 @@ import { StageLayout } from './StageLayout'
 import type { UseTransactionFlowResult } from '../hooks/useTransactionFlow'
 import { TRUSTED_AUTHORIZATION_LABEL } from '../engines/securityEngine'
 import { formatPKR } from '../lib/currency'
+import { useAppState } from '../state/store'
 
 interface TransactionStageProps {
   flow: UseTransactionFlowResult
@@ -34,6 +35,7 @@ export function TransactionStage({
   successTitle = 'Transaction Complete',
 }: TransactionStageProps) {
   const navigate = useNavigate()
+  const { devMode, secretWord } = useAppState()
   const [manualOpen, setManualOpen] = useState(false)
   const [manualWord, setManualWord] = useState('')
   const [manualDigits, setManualDigits] = useState('')
@@ -196,6 +198,31 @@ export function TransactionStage({
             message="Listen for your security challenge"
             detail="Your challenge number is spoken, not shown. It is different for every transaction."
           />
+
+          {/*
+            Developer mode reveals the challenge on screen.
+
+            Without this there is no way out of this step if the speech output
+            cannot be heard: the number exists only in audio, so a silent
+            device means a transaction that can never be completed or
+            debugged. Hidden behind developer mode, so the privacy-first
+            experience is unchanged for a real user.
+          */}
+          {devMode && flow.challenge && (
+            <div className="rounded-2xl border border-dashed border-cyan/40 bg-cyan/5 p-4 text-left">
+              <p className="text-[0.65rem] font-semibold uppercase tracking-[0.12em] text-cyan">
+                Developer mode — spoken challenge
+              </p>
+              <p className="mt-2 text-sm text-white/80">
+                Say: <span className="font-bold text-cyan-light">{secretWord}</span>{' '}
+                <span className="font-bold text-cyan-light">{flow.challenge.number}</span>
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-white/45">
+                The number is random and changes on every transaction. Hidden from real users, who hear it instead.
+              </p>
+            </div>
+          )}
+
           {micButton}
           {cancelButton}
           <button
@@ -208,9 +235,16 @@ export function TransactionStage({
           </button>
           {manualOpen && (
             <div className="flex flex-col gap-2 rounded-2xl border border-white/10 bg-midnight-800 p-4 text-left">
-              <p className="text-xs text-white/40">
-                Shown only because you opened this fallback. Your challenge number was spoken to you.
+              <p className="text-xs leading-relaxed text-white/40">
+                Shown only because you opened this fallback. The number alone proves nothing without your secret
+                word, which is never displayed.
               </p>
+              {flow.challenge && (
+                <p className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm text-white/80">
+                  This transaction&rsquo;s number is{' '}
+                  <span className="font-bold text-cyan-light">{flow.challenge.number}</span>
+                </p>
+              )}
               <label htmlFor="manual-word" className="text-xs text-white/60">
                 Secret word
               </label>
@@ -222,7 +256,7 @@ export function TransactionStage({
                 className="rounded-xl border border-white/15 bg-midnight-700 px-4 py-3 text-white"
               />
               <label htmlFor="manual-digits" className="text-xs text-white/60">
-                Security number you heard
+                Security number
               </label>
               <input
                 id="manual-digits"

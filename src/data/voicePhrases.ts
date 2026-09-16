@@ -85,9 +85,59 @@ export const PHRASES = {
     "Sorry, I didn't understand that. Say help for a list of commands.",
   ),
   help: phrase(
-    'آپ کہہ سکتے ہیں: میرا بیلنس بتاؤ۔ احمد کو پانچ ہزار روپے بھیجو۔ ہزار کا موبائل لوڈ کرو۔ کیش ڈپازٹ کرنا ہے۔ این ایف سی پیمنٹ۔ یا کسی بھی وقت کہیے، منسوخ کرو۔',
-    'Aap keh sakte hain: Mera balance batao. Ahmed ko paanch hazaar rupay bhejo. Hazaar ka mobile load karo. Cash deposit karna hai. NFC payment. Ya kisi bhi waqt kahiye, cancel karo.',
-    'You can say: tell me my balance. Send five thousand rupees to Ahmed. Load one thousand mobile top-up. Cash deposit. N F C payment. Or say cancel at any time.',
+    'آپ کہہ سکتے ہیں: ایک، دو، تین، چار یا پانچ۔ یا کسی بھی وقت کہیے، منسوخ کرو۔',
+    'Aap keh sakte hain: ek, do, teen, char ya paanch. Ya kisi bhi waqt kahiye, cancel karo.',
+    'Say a number from one to five to choose an option. Say menu to hear the list again, or say cancel at any time.',
+  ),
+
+  /**
+   * The spoken main menu.
+   *
+   * Numbered because a number is the shortest, most reliably recognised
+   * thing a person can say, and because it does not depend on the user
+   * remembering any particular phrasing. This is the primary way a blind
+   * user navigates AwazPay; the on-screen list mirrors it.
+   */
+  menu: phrase(
+    'کہیے ایک، این ایف سی سے ادائیگی کے لیے۔ کہیے دو، کسی کو رقم بھیجنے کے لیے۔ کہیے تین، اپنا بیلنس سننے کے لیے۔ کہیے چار، اپنی حالیہ ٹرانزیکشنز کے لیے۔ کہیے پانچ، کیش جمع کرنے کے لیے۔',
+    'Kahiye ek, NFC se payment ke liye. Kahiye do, kisi ko paise bhejne ke liye. Kahiye teen, apna balance sunne ke liye. Kahiye char, apni account activity ke liye. Kahiye paanch, cash deposit ke liye.',
+    'Say 1 for N F C payment. Say 2 to transfer money to someone. Say 3 to check your balance. Say 4 for your account activity. Say 5 for cash deposit.',
+  ),
+
+  menuIntro: phrase(
+    'آواز پے تیار ہے۔',
+    'AwazPay tayyar hai.',
+    'AwazPay is ready.',
+  ),
+
+  menuRepeat: phrase('دوبارہ سنیے۔', 'Dobara suniye.', 'Here are your options again.'),
+
+  // ------------------------------------------- spoken secret word setup
+  askSecretWord: phrase(
+    'اب اپنا خفیہ لفظ بولیے۔ یہ ایک لفظ ہونا چاہیے جو صرف آپ جانتے ہوں۔',
+    'Ab apna secret word boliye. Yeh aik lafz hona chahiye jo sirf aap jante hon.',
+    'Now say your secret word. Choose a single word that only you would know. Say it after the tone.',
+  ),
+  confirmSecretWord: fill(
+    phrase(
+      'میں نے سنا {word}۔ تصدیق کے لیے کہیے ہاں، یا دوبارہ کہنے کے لیے کہیے نہیں۔',
+      'Main ne suna {word}. Tasdeeq ke liye kahiye haan, ya dobara kehne ke liye kahiye nahi.',
+      'I heard {word}. Say yes to confirm, or say no to choose a different word.',
+    ),
+    {},
+  ),
+  secretWordSaved: fill(
+    phrase(
+      'آپ کا خفیہ لفظ محفوظ ہو گیا۔ ہر ادائیگی سے پہلے میں آپ سے {word} اور ایک نمبر مانگوں گا۔',
+      'Aapka secret word mehfooz ho gaya. Har payment se pehle main aapse {word} aur aik number mangunga.',
+      'Your secret word is saved. Before every payment I will ask you to say {word} followed by a random number.',
+    ),
+    {},
+  ),
+  secretWordNotHeard: phrase(
+    'میں خفیہ لفظ نہیں سن سکا۔ براہ کرم ایک لفظ صاف بولیے۔',
+    'Main secret word nahin sun saka. Barah-e-karam aik lafz saaf boliye.',
+    "I didn't catch your secret word. Please say a single word clearly.",
   ),
   // ------------------------------------------------- greetings, small talk
   greeting: phrase(

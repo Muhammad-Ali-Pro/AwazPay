@@ -5,9 +5,13 @@
  * in AwazPay, so this service is the single place that speaks: sensitive
  * figures are delivered here rather than rendered on screen.
  *
- * Urdu is the preferred spoken language. Because a real Urdu voice is absent
- * from most desktops, `resolvePhrase` falls back to Roman Urdu rather than to
- * English, which keeps the Urdu-first experience intact on any machine.
+ * Output is English by default. Urdu remains available by choosing the Urdu
+ * profile in Settings, which uses Urdu script when a real Urdu voice is
+ * installed and Roman Urdu when one is not.
+ *
+ * Voices are chosen by quality, not by list order — see `voiceQuality`. That
+ * one change is the difference between the flat legacy desktop voices and the
+ * modern neural ones most machines also have installed.
  */
 import type { Phrase } from '../data/voicePhrases'
 
@@ -24,12 +28,14 @@ export interface SpeakOptions {
 
 export const URDU_LANG = 'ur-PK'
 
+/** Spoken output language when a caller does not specify one. */
+export const DEFAULT_LANG = 'en-US'
+
 /** Tried in order when the requested language has no installed voice. */
 const VOICE_FALLBACKS: Record<string, string[]> = {
-  // 'auto' is the code-mixed profile: it speaks Roman Urdu through whichever
-  // South Asian English voice is available, which is the closest match most
-  // machines actually have installed.
-  auto: ['en-IN', 'en-PK', 'ur-PK', 'en-GB', 'en-US'],
+  // 'auto' speaks English. Recognition still accepts Roman Urdu and Urdu,
+  // but the reply comes back in English so the voice and the words match.
+  auto: ['en-US', 'en-GB', 'en-IN', 'en-PK'],
   'ur-PK': ['ur-PK', 'ur-IN', 'ur', 'hi-IN', 'en-IN', 'en-PK', 'en-GB', 'en-US'],
   'en-PK': ['en-PK', 'en-IN', 'en-GB', 'en-US'],
   'en-IN': ['en-IN', 'en-GB', 'en-US'],
@@ -53,13 +59,58 @@ if (isSpeechSynthesisSupported()) {
   window.speechSynthesis.onvoiceschanged = () => loadVoices()
 }
 
+/**
+ * Scores a voice on how natural it is likely to sound.
+ *
+ * The old picker just took the first voice whose language tag matched. On
+ * Windows that is almost always "Microsoft David/Zira Desktop", the legacy
+ * SAPI5 voices, which sound flat and robotic — and were the reason speech
+ * output sounded synthetic. Modern browsers ship far better voices alongside
+ * them; they simply are not first in the list.
+ *
+ * Ranking, highest first:
+ *   +100  Microsoft "Natural" / "Neural" voices (by far the best on Windows)
+ *   +80   Google voices (Chrome's own, consistently good)
+ *   +40   any other network-backed voice (localService === false)
+ *   -60   known legacy desktop voices, which are the robotic ones
+ */
+function voiceQuality(voice: SpeechSynthesisVoice): number {
+  const name = voice.name.toLowerCase()
+  let score = 0
+
+  if (name.includes('natural') || name.includes('neural')) score += 100
+  if (name.includes('google')) score += 80
+  if (name.includes('online')) score += 30
+  if (!voice.localService) score += 40
+  // Legacy SAPI5 desktop voices: intelligible, but unmistakably synthetic.
+  if (name.includes('desktop') || /\b(david|zira|mark|hazel)\b/.test(name)) score -= 60
+  if (voice.default) score += 5
+
+  return score
+}
+
+/** Best available voice for a tag, by quality rather than list order. */
 function findVoice(tag: string): SpeechSynthesisVoice | null {
   const voices = loadVoices()
   if (!voices.length) return null
-  const exact = voices.find((v) => v.lang.toLowerCase().replace('_', '-') === tag.toLowerCase())
-  if (exact) return exact
-  const base = tag.split('-')[0].toLowerCase()
-  return voices.find((v) => v.lang.toLowerCase().startsWith(base)) ?? null
+  const wanted = tag.toLowerCase()
+  const base = wanted.split('-')[0]
+
+  const exact = voices.filter((v) => v.lang.toLowerCase().replace('_', '-') === wanted)
+  const sameLanguage = voices.filter((v) => v.lang.toLowerCase().startsWith(base))
+  const pool = exact.length ? exact : sameLanguage
+  if (!pool.length) return null
+
+  return pool.slice().sort((a, b) => voiceQuality(b) - voiceQuality(a))[0]
+}
+
+/** Every installed voice, ranked, for the Settings diagnostics readout. */
+export function listRankedVoices(lang: string): Array<{ name: string; lang: string; score: number }> {
+  const base = lang.toLowerCase().split('-')[0]
+  return loadVoices()
+    .filter((v) => v.lang.toLowerCase().startsWith(base))
+    .map((v) => ({ name: v.name, lang: v.lang, score: voiceQuality(v) }))
+    .sort((a, b) => b.score - a.score)
 }
 
 /** Picks the closest installed voice, walking the fallback chain. */
@@ -99,11 +150,20 @@ export function describeActiveVoice(lang: string): string {
 export function resolvePhrase(input: string | Phrase, lang: string): string {
   if (typeof input === 'string') return input
   const tag = lang.toLowerCase()
-  // Urdu and the code-mixed profile both speak Urdu; only the script differs
-  // by whether a real Urdu voice exists to pronounce it.
-  if (tag.startsWith('ur') || tag === 'auto') {
-    return isUrduVoiceAvailable() && tag.startsWith('ur') ? input.ur : input.roman
+
+  // Urdu script is only ever spoken by a genuine Urdu voice; no English voice
+  // can pronounce it at all.
+  if (tag.startsWith('ur')) {
+    return isUrduVoiceAvailable() ? input.ur : input.roman
   }
+
+  // Everything else, including the 'auto' profile, speaks English.
+  //
+  // This used to return Roman Urdu for 'auto', which meant an English voice
+  // was reading "Aapka balance private audio ke zariye bataya ja raha hai"
+  // phonetically. That is the main reason output sounded wrong: the voice was
+  // fine, the text simply was not English. Urdu output stays available by
+  // choosing the Urdu profile explicitly in Settings.
   return input.en
 }
 
@@ -139,8 +199,32 @@ export function isSpeaking(): boolean {
 
 let currentUtterance: SpeechSynthesisUtterance | null = null
 
+/**
+ * Light touch-ups that make synthesised speech sound less mechanical.
+ *
+ * Speech engines read punctuation as prosody, so a few substitutions buy a
+ * lot of naturalness for free: currency read as words rather than a symbol,
+ * digit groups spaced so they are grouped rather than rattled off, and a
+ * comma inserted after an opening clause so the sentence has a breath in it.
+ */
+function humanise(text: string): string {
+  return (
+    text
+      // "PKR 5,000" reads better as "5000 rupees" than as letters plus commas.
+      .replace(/\bPKR\s*([\d,]+)/gi, (_, amount: string) => `${amount.replace(/,/g, '')} rupees`)
+      .replace(/\bRs\.?\s*([\d,]+)/gi, (_, amount: string) => `${amount.replace(/,/g, '')} rupees`)
+      // Thousands separators make engines pause oddly mid-number.
+      .replace(/(\d),(\d{3})\b/g, '$1$2')
+      // Give a short breath after a leading discourse word.
+      .replace(/^(Sorry|Okay|Right|Well|Yes|No)\s+/i, '$1, ')
+      // Collapse the double spaces those rules can leave behind.
+      .replace(/\s{2,}/g, ' ')
+      .trim()
+  )
+}
+
 export function speak(text: string, options: SpeakOptions = {}): void {
-  const { rate = 1, lang = URDU_LANG, pitch = 1, interrupt = true, onStart, onEnd, onError } = options
+  const { rate, lang = DEFAULT_LANG, pitch = 1, interrupt = true, onStart, onEnd, onError } = options
 
   if (!isSpeechSynthesisSupported() || !text.trim()) {
     // Without synthesis the caller still needs its continuation to run.
@@ -150,8 +234,12 @@ export function speak(text: string, options: SpeakOptions = {}): void {
 
   if (interrupt) window.speechSynthesis.cancel()
 
-  const utterance = new SpeechSynthesisUtterance(text)
-  utterance.rate = rate
+  const spoken = humanise(text)
+  const utterance = new SpeechSynthesisUtterance(spoken)
+  // Slightly under real time reads as measured and calm rather than rushed,
+  // which matters more here than usual: this is the only channel the user
+  // has, and every figure in it is financial.
+  utterance.rate = rate ?? 0.97
   utterance.pitch = pitch
   const voice = pickVoice(lang)
   if (voice) {
@@ -184,7 +272,7 @@ export function speak(text: string, options: SpeakOptions = {}): void {
 
   // Chrome silently drops long utterances when the tab is backgrounded; this
   // guard makes sure a flow waiting on onEnd is never stranded.
-  const guardMs = Math.max(4000, text.length * 95)
+  const guardMs = Math.max(4000, spoken.length * 95)
   setTimeout(() => {
     if (currentUtterance === utterance && !window.speechSynthesis.speaking) finish(false)
   }, guardMs)

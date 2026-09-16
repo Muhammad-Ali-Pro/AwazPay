@@ -13,6 +13,9 @@ import {
   extractMobileNumber,
   extractRecipient,
   isFinancialIntent,
+  isMenuRequest,
+  MENU_OPTIONS,
+  parseMenuSelection,
   parseTranscriptSync,
   pickBestInterpretation,
   stripWakePhrase,
@@ -308,6 +311,52 @@ assert('cloud.isSupported() does not throw outside a browser', (() => {
     return false
   }
 })())
+
+console.log('\nSpoken numbered menu')
+check('menu has five options', MENU_OPTIONS.length, 5)
+check('option 1 is NFC payment', MENU_OPTIONS[0].intent, 'pay_nfc')
+check('option 2 is transfer money', MENU_OPTIONS[1].intent, 'pay')
+check('option 3 is balance', MENU_OPTIONS[2].intent, 'check_balance')
+check('option 4 is activity', MENU_OPTIONS[3].intent, 'recent_transactions')
+check('option 5 is cash deposit', MENU_OPTIONS[4].intent, 'cash_deposit')
+check('mobile top-up is not on the menu', MENU_OPTIONS.some((o) => o.intent === 'mobile_topup'), false)
+
+const MENU_UTTERANCES: Array<[string, number | null]> = [
+  ['1', 1],
+  ['3', 3],
+  ['one', 1],
+  ['two', 2],
+  ['three', 3],
+  ['four', 4],
+  ['five', 5],
+  ['option two', 2],
+  ['number 4', 4],
+  ['say five', 5],
+  // Roman Urdu numerals, since the user may answer in either language.
+  ['ek', 1],
+  ['do', 2],
+  ['teen', 3],
+  ['paanch', 5],
+  // Wake phrase in front is fine; it is stripped before matching.
+  ['Hey AwazPay three', 3],
+  // Out of range, and not a menu choice.
+  ['6', null],
+  ['nine', null],
+  // A real command that merely contains a number word must NOT be read as a
+  // menu pick — this is the case that would otherwise move money by accident.
+  ['Send two thousand rupees to Ahmed', null],
+  ['pay 5000 to Ahmed', null],
+  ['what is my balance', null],
+]
+for (const [utterance, expected] of MENU_UTTERANCES) {
+  const picked = parseMenuSelection(utterance)
+  check(`"${utterance}" -> ${expected ?? 'not a menu choice'}`, picked?.number ?? null, expected)
+}
+
+check('menu request: "menu"', isMenuRequest('menu'), true)
+check('menu request: "options"', isMenuRequest('options'), true)
+check('menu request: "repeat the options"', isMenuRequest('what can i say'), true)
+check('not a menu request', isMenuRequest('send money to Ahmed'), false)
 
 console.log('\nSecurity challenge')
 const challenges = Array.from({ length: 8 }, () => generateChallenge())

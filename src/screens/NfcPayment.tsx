@@ -6,6 +6,8 @@ import { PrivacyCurtain } from '../components/PrivacyCurtain'
 import { StageLayout } from '../components/StageLayout'
 import { TransactionStage } from '../components/TransactionStage'
 import { useTransactionFlow } from '../hooks/useTransactionFlow'
+import { useCancelHandler } from '../hooks/useCancelHandler'
+import { useReturnToMenu } from '../hooks/useReturnToMenu'
 import { useAnnouncer } from '../state/announcer'
 import { useAppState } from '../state/store'
 import { useVoiceSession } from '../state/voiceSession'
@@ -49,21 +51,40 @@ function NfcScanning({ onDetected }: { onDetected: (merchant: Merchant) => void 
   const { announce } = useAnnouncer()
   const { settings } = useAppState()
   const reduceMotion = useReducedMotion()
-  const startedRef = useRef(false)
+  const announcedRef = useRef(false)
+  const returnToMenu = useReturnToMenu()
 
+  /**
+   * Run the terminal detection.
+   *
+   * The guard covers only the spoken prompt, never the timer. Guarding the
+   * whole effect left this screen searching forever: React's development
+   * double-invoke ran the effect, tore it down (clearing the timer), then ran
+   * it again, where the guard returned early and nothing was ever
+   * rescheduled. The timer must be created fresh on every effect run and the
+   * cleanup must be allowed to cancel it.
+   */
   useEffect(() => {
-    if (startedRef.current) return
-    startedRef.current = true
-    announce(PHRASES.nfcBringPhone)
+    if (!announcedRef.current) {
+      announcedRef.current = true
+      announce(PHRASES.nfcBringPhone)
+    }
 
     const timer = setTimeout(() => {
       vibrate('detect', settings.vibrationEnabled)
-      announce(PHRASES.nfcDetected)
-      onDetected(pickMerchant())
+      // Hand over only once "terminal detected" has finished playing. Calling
+      // onDetected immediately swapped in the payment flow, whose own opening
+      // line then cut this one off mid-sentence.
+      announce(PHRASES.nfcDetected, { onEnd: () => onDetected(pickMerchant()) })
     }, DETECT_MS)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // "Cancel" works by voice here, with no wake phrase needed.
+  useCancelHandler(() => {
+    announce(PHRASES.cancelled, { onEnd: () => returnToMenu(300) })
+  })
 
   return (
     <StageLayout
